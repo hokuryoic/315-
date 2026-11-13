@@ -58,10 +58,10 @@ input[type=range]{width:200px}
 .char{display:flex;flex-direction:column;align-items:center;gap:10px;padding:6px 8px 9px;border-radius:9px;transition:background .06s}
 .char-letter{font-size:1.6rem;font-weight:750;line-height:1;color:#173b63;padding:2px 6px;border-radius:6px}
 .char-morse{--d:9px;display:flex;align-items:center;gap:7px;height:14px}
- /* ②の文字と符号は①のボタンと同じ大きさ */
-#converted .char{gap:6px;padding:5px 7px 7px}
-#converted .char-letter{font-size:1.15rem;padding:1px 4px}
-#converted .char-morse{--d:5px;gap:4px;height:10px}
+ /* ②③の文字と符号は①のボタンと同じ大きさ */
+#converted .char,#decoded .char{gap:6px;padding:5px 7px 7px}
+#converted .char-letter,#decoded .char-letter{font-size:1.15rem;padding:1px 4px}
+#converted .char-morse,#decoded .char-morse{--d:5px;gap:4px;height:10px}
 .char.active-char{background:#fff2bd;box-shadow:inset 0 0 0 2px #f0c22e}
 .char.active-char .char-letter{color:#7a4f00}
 .status{font-size:.9rem;color:#4d647b;margin-top:12px;min-height:1.4em}
@@ -92,7 +92,8 @@ footer{text-align:center;color:#718399;font-size:.8rem;padding:12px}
 .fp-knob{position:absolute;top:3px;left:0;width:16px;height:16px;margin-left:-8px;border-radius:50%;background:#fff;border:3px solid #1769aa;box-shadow:0 1px 3px #0003}
 .fp-time{font-size:.85rem;color:#40566b;font-variant-numeric:tabular-nums;flex:none}
 .microw{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.mic-note{margin:10px 0 0;padding:8px 10px;border-radius:8px;background:#fdecea;color:#a3261b;font-size:.85rem;line-height:1.6}
+.mic-note{margin:10px 0 0;padding:8px 10px;border-radius:8px;background:#fdecea;color:#a3261b;font-size:.85rem;line-height:1.6;white-space:pre-line}
+.mic-note .open-tab{display:inline-block;margin-top:8px;text-decoration:none;font-size:.9rem;padding:8px 14px;border-radius:9px;background:#1769aa;color:#fff;font-weight:650}
 .trace{display:block;width:100%;height:70px;margin-top:10px;border-radius:8px;background:#102b46}
 .microw2{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-top:8px}
 .microw2 .hint{margin:0;font-size:.8rem}
@@ -754,9 +755,10 @@ function decodeSamples(samples,rate,fixedU=null){
   return {dec,freq};
 }
 let fileChars=[]; // 読み取った各文字の、ファイル内での時刻
+let fileDecoded=null,fileReveal=false,fileShownN=-1; // ファイルの読み取り結果／「再生に合わせて表示」中か
 $('decFile').addEventListener('change',async e=>{
   const file=e.target.files[0];if(!file)return;
-  stopMic();clearDecoded();fileStop();
+  stopMic();clearDecoded();fileDecoded=null;fileReveal=false;fileChars=[];fileStop();
   $('fileName').textContent=file.name;
   const player=$('filePlayer');player.src=URL.createObjectURL(file);$('fplayer').hidden=false;
   decStatus.textContent='読み取り中…';
@@ -773,7 +775,7 @@ $('decFile').addEventListener('change',async e=>{
       if(r.dec.text()&&Math.abs(w-set)/set>.2){dec=r.dec;freq=r.freq;note=`（ファイルの速さ（約${Math.round(w)} WPM）が②の速度（${set} WPM）と違ったため、自動で見分けました）`}
     }
     showDecoded(dec,freq);
-    fileChars=dec.words.flat();
+    fileChars=dec.words.flat();fileDecoded={dec,freq};fileShownN=-1;
     decStatus.textContent=dec.text()?'変換が終わりました。'+note+'▶で再生すると、文字が音に合わせて光ります。赤い「*」は読み取れなかった符号です。':'信号音が見つかりませんでした。';
   }catch(err){decStatus.textContent='このファイルは読み込めませんでした。別の形式（WAVなど）でお試しください。'}
   e.target.value='';
@@ -782,11 +784,20 @@ $('decFile').addEventListener('change',async e=>{
 /* --- 音声ファイルの再生（自前の再生バー） --- */
 const fp=$('filePlayer');
 const fmtT=t=>{t=Math.max(0,t||0);return Math.floor(t/60)+':'+String(Math.floor(t%60)).padStart(2,'0')};
+// 読み取った文字のうち、最初の n 文字だけを表示する（再生に合わせて少しずつ表示するため）
+function showFilePart(n){
+  const {dec,freq}=fileDecoded;let left=n;
+  const words=dec.words.map(w=>{const t=w.slice(0,Math.max(0,left));left-=w.length;return t});
+  showDecoded({isFilePart:true,words,code:'',seq:dec.seq,fixedU:dec.fixedU,timing:()=>dec.timing(),
+    text(){return words.filter(w=>w.length).map(w=>w.map(c=>c.ch).join('')).join(' ')}},freq);
+}
 function fileUI(){
   const d=fp.duration||0,c=fp.currentTime||0,r=d?Math.min(1,c/d):0;
   $('fpFill').style.width=(r*100)+'%';$('fpKnob').style.left=(r*100)+'%';
   $('fpTime').textContent=fmtT(c)+' / '+fmtT(d);
   $('fpBtn').textContent=fp.paused?'▶':'❚❚';$('fpBtn').setAttribute('aria-label',fp.paused?'再生':'一時停止');
+  // クリアの後に再生したときは、音が鳴った文字から順に表示していく
+  if(fileReveal&&fileDecoded){const n=fileChars.filter(ch=>c>=ch.t0-.03).length;if(n!==fileShownN){fileShownN=n;showFilePart(n)}}
   // 今鳴っている文字を光らせる
   let k=-1;if(!fp.paused||c>0)k=fileChars.findIndex(ch=>c>=ch.t0-.03&&c<=ch.t1+.03);
   decodedEl.querySelectorAll('.char.active-char').forEach(el=>{if(+el.dataset.k!==k)el.classList.remove('active-char')});
@@ -795,7 +806,15 @@ function fileUI(){
 function fileLoop(){fileUI();if(!fp.paused)requestAnimationFrame(fileLoop)}
 function fileStop(){if(fp.src){fp.pause();try{fp.currentTime=0}catch(e){}}fileUI()}
 $('fpBtn').addEventListener('click',()=>{
-  if(fp.paused){stop();if(mic)stopMic();fp.play().then(()=>requestAnimationFrame(fileLoop)).catch(()=>{decStatus.textContent='再生できませんでした。'})}
+  if(fp.paused){
+    stop();if(mic)stopMic();
+    // 表示がクリアされている（またはマイクの結果が出ている）ときは、このファイルの結果を再生に合わせて表示し直す
+    if(fileDecoded){
+      fileChars=fileDecoded.dec.words.flat();
+      const shown=lastDecoder&&(lastDecoder===fileDecoded.dec||lastDecoder.isFilePart);
+      if(!shown){fileReveal=true;fileShownN=-1;decStatus.textContent='再生に合わせて、読み取った文字を表示します。'}
+    }
+    if(fileReveal&&fp.duration&&fp.currentTime>=fp.duration-.05)fp.currentTime=0;fp.play().then(()=>requestAnimationFrame(fileLoop)).catch(()=>{decStatus.textContent='再生できませんでした。'})}
   else fp.pause();
 });
 ['loadedmetadata','pause','ended','seeked','timeupdate'].forEach(ev=>fp.addEventListener(ev,fileUI));
@@ -847,13 +866,42 @@ function drawTrace(an){
   }
 }
 const isIOS=()=>/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
-function micNote(t){const el=$('micNote');el.textContent=t;el.hidden=!t;if(t)decStatus.textContent=t}
+// 使っているブラウザと端末を見分ける（マイクの設定方法の案内を合わせるため）
+function browserInfo(){
+  const ua=navigator.userAgent,ios=isIOS(),android=/Android/.test(ua);
+  let name;
+  if(ios)name=/CriOS/.test(ua)?'Chrome':/EdgiOS/.test(ua)?'Edge':/FxiOS/.test(ua)?'Firefox':'Safari';
+  else name=/Edg\//.test(ua)?'Edge':/Firefox\//.test(ua)?'Firefox':/(Chrome|Chromium)\//.test(ua)?'Chrome':/Safari\//.test(ua)?'Safari':'ブラウザ';
+  return {name,ios,android,device:ios?(/iPhone/.test(ua)?'iPhone':'iPad'):android?'Android':'パソコン'};
+}
+// Googleサイトなどに「埋め込み」で表示されているか
+const isEmbedded=()=>{try{return window.self!==window.top}catch(e){return true}};
+// マイクが許可されていないときの、ブラウザ別の案内
+function micPermissionHelp(){
+  const b=browserInfo();
+  if(b.ios){
+    const app=b.name; // iPad・iPhoneでは、ブラウザのアプリごとにマイクの許可がある
+    return `マイクの使用が許可されていません（${b.device}の${app}）。\n`+
+      `① 「設定」アプリを開き、「${app}」（新しいiPadOS・iOSでは「アプリ」→「${app}」）→「マイク」を${app==='Safari'?'「確認」または「許可」':'オン'}にしてください。\n`+
+      `② ${app}に戻ってページを読み込み直し、もう一度「聞き取り開始」を押して、マイクの確認が出たら「許可」を選んでください。`;
+  }
+  if(b.android)return `マイクの使用が許可されていません（Androidの${b.name}）。アドレスバー左のアイコン →「権限」→「マイク」を許可し、ページを読み込み直してください。それでもだめなときは、端末の「設定」→「アプリ」→「${b.name}」→「権限」→「マイク」を許可してください。`;
+  if(b.name==='Safari')return 'マイクの使用が許可されていません（MacのSafari）。メニューの「Safari」→「設定」→「Webサイト」→「マイク」で、このページを「許可」にして読み込み直してください。あわせて、Macの「システム設定」→「プライバシーとセキュリティ」→「マイク」でSafariがオンになっているかも確認してください。';
+  if(b.name==='Firefox')return 'マイクの使用が許可されていません（Firefox）。アドレスバー左のマイクのアイコンを押して、ブロックを解除してから読み込み直してください。';
+  return `マイクの使用が許可されていません（${b.name}）。アドレスバー左のアイコン（サイトの情報）を押し、「マイク」を「許可」にしてから読み込み直してください。Macの場合は、「システム設定」→「プライバシーとセキュリティ」→「マイク」で${b.name}がオンになっているかも確認してください。`;
+}
+function micNote(t,openLink){
+  const el=$('micNote');el.textContent=t;el.hidden=!t;
+  if(t&&openLink){const a=document.createElement('a');a.href=location.href;a.target='_blank';a.rel='noopener';a.className='action open-tab';a.textContent='↗ 新しいタブで開く';el.append(document.createElement('br'),a)}
+  if(t)decStatus.textContent=t.split('\n')[0];
+}
 async function startMic(){
   fileChars=[];if(fp.src)fp.pause();
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia||!window.isSecureContext){
-    micNote(isIOS()
-      ?'iPad・iPhoneでは、「ファイル」アプリなどから直接開いたHTMLではマイクが使えません。https で始まるWebページとして開いてください（くわしくは先生に）。音声ファイルの読み取りは使えます。'
-      :'この開き方ではマイクが使えません。https で始まるWebページとして開くか、iMacのブラウザでお試しください。');return}
+    const b=browserInfo();
+    micNote(b.ios
+      ?`${b.device}では、「ファイル」アプリなどから直接開いたHTMLではマイクが使えません（${b.name}でも同じです）。https で始まるWebページとして開いてください（くわしくは先生に）。音声ファイルの読み取りは使えます。`
+      :'この開き方ではマイクが使えません。https で始まるWebページとして開いてください。音声ファイルの読み取りは使えます。');return}
   micNote('');clearDecoded();
   // iPad・iPhone（Safari）では、音の処理はボタンを押したその瞬間に始めないと動かないため、
   // マイクの許可を待つ前に AudioContext を作って起動しておく
@@ -890,9 +938,15 @@ async function startMic(){
     })();
   }catch(err){
     mic=null;$('micBtn').disabled=false;try{ctx.close()}catch(e){}
-    micNote(err&&err.name==='NotAllowedError'
-      ?(isIOS()?'マイクの使用が許可されていません。「設定」→「Safari」→「マイク」で「確認」または「許可」にして、ページを読み込み直してください。':'マイクの使用が許可されていません。ブラウザのアドレスバー付近のマイクのマークから許可してください。')
-      :'マイクを使えませんでした（'+(err&&err.name||'不明なエラー')+'）。');
+    const nm=err&&err.name;
+    if(nm==='NotAllowedError'||nm==='SecurityError'){
+      // Googleサイトなどの埋め込み表示では、ブラウザの設定に関係なくマイクが使えない
+      if(isEmbedded())micNote('このページはほかのページの中に埋め込まれて表示されているため、マイクが使えません（ブラウザの設定を変えても使えません）。下のボタンで新しいタブに開いてから「聞き取り開始」を押してください。うまく開かないときは、先生に配られたURLを直接開いてください。',true);
+      else micNote(micPermissionHelp());
+    }
+    else if(nm==='NotFoundError'||nm==='OverconstrainedError')micNote('マイクが見つかりませんでした。マイクがつながっているか確認してください。');
+    else if(nm==='NotReadableError'||nm==='AbortError')micNote('マイクがほかのアプリで使われているため使えません。ほかのアプリ（ビデオ通話など）を閉じてから、もう一度お試しください。');
+    else micNote('マイクを使えませんでした（'+(nm||'不明なエラー')+'）。');
   }
 }
 function stopMic(){
@@ -931,7 +985,8 @@ $('decSend').addEventListener('click',()=>{
 $('decClear').addEventListener('click',()=>{
   if(mic){const m=mic;m.dec=new MorseDecoder({fixedU:decFixedU()});m.an.onRun=(on,d)=>m.dec.run(on,d);m.an.onTick=(on,el)=>m.dec.tick(on,el);m.shown=-1}
   clearDecoded();if(!mic){micRec=null;$('micSave').disabled=true}else{micRec.chunks=[];micRec.len=0}
-  decStatus.textContent=mic?'聞き取り中…':'';
+  fileReveal=false;fileShownN=-1;
+  decStatus.textContent=mic?'聞き取り中…':(fileDecoded?'表示を消しました。▶で再生すると、音に合わせてもう一度表示します。':'');
 });
 
 render(cleanText(message.value));
